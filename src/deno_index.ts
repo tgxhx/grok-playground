@@ -1,10 +1,65 @@
 const DOMAIN_URL = "https://grok.com";
 const ASSETS_URL = "https://assets.grok.com";
 
+// 用 Map 存储账户信息，key 是账户 ID
+const memoryAccounts = new Map<string, { id: string; cookie: string }>();
 
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   console.log('Request URL:', req.url);
+
+  // 添加新的路由处理同步请求
+  if (url.pathname === '/api/sync') {
+    if (req.method === 'POST') {
+      const body = await req.json();
+      const localAccounts = body.accounts || [];
+      
+      // 合并本地和内存中的账户
+      const mergedAccounts = new Map();
+      
+      // 先添加内存中的账户
+      for (const [id, account] of memoryAccounts) {
+        mergedAccounts.set(id, account);
+      }
+      
+      // 合并本地账户
+      for (const account of localAccounts) {
+        if (account.id && account.cookie) {
+          mergedAccounts.set(account.id, account);
+        }
+      }
+      
+      // 更新内存存储
+      memoryAccounts.clear();
+      for (const [id, account] of mergedAccounts) {
+        memoryAccounts.set(id, account);
+      }
+      
+      // 返回合并后的账户列表
+      return new Response(JSON.stringify({
+        accounts: Array.from(mergedAccounts.values())
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    return new Response('Method not allowed', { status: 405 });
+  }
+
+  // 添加保存账户的路由
+  if (url.pathname === '/api/account') {
+    if (req.method === 'POST') {
+      const body = await req.json();
+      if (body.id && body.cookie) {
+        memoryAccounts.set(body.id, {
+          id: body.id,
+          cookie: body.cookie
+        });
+        return new Response(JSON.stringify({ success: true }));
+      }
+      return new Response('Invalid account data', { status: 400 });
+    }
+    return new Response('Method not allowed', { status: 405 });
+  }
 
   // 处理主页面
   const filePath = url.pathname;

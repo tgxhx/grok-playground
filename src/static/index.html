@@ -152,15 +152,74 @@
             border-radius: 4px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        
+        .sync-btn {
+            background: linear-gradient(135deg, #52c41a, #389e0d);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .sync-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            background: linear-gradient(135deg, #73d13d, #52c41a);
+        }
+
+        #toast-container {
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+            transition: all 0.3s ease;
+            opacity: 0;
+            pointer-events: none; /* 防止 toast 遮挡点击事件 */
+        }
+
+        #toast-container.show {
+            opacity: 1;
+        }
+
+        .toast-content {
+            background: rgba(0, 0, 0, 0.75);
+            color: white;
+            padding: 16px 32px;
+            border-radius: 24px; /* 更大的圆角 */
+            font-size: 16px;
+            min-width: 200px;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(8px); /* 添加毛玻璃效果 */
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .toast-success {
+            border-bottom: 3px solid #52c41a;
+        }
+
+        .toast-error {
+            border-bottom: 3px solid #ff4d4f;
+        }
     </style>
 </head>
 <body>
 
-    <div style="display: flex; align-items: center; justify-content:flex-start; margin-bottom: 20px;">
-        <h1 style="margin: 0;">Grok游乐场</h1>
-        <a href="#" id="grok-link" class="grok-link" target="_blank">
-            <strong>🚀 点击前往 Grok 聊天页面 🚀</strong>
-        </a>
+    <div style="display: flex; align-items: center; justify-content:space-between; margin-bottom: 20px;">
+        <div style="display: flex; align-items: center;">
+            <h1 style="margin: 0;">Grok游乐场</h1>
+            <a href="#" id="grok-link" class="grok-link" target="_blank">
+                <strong>🚀 点击前往 Grok 聊天页面 🚀</strong>
+            </a>
+        </div>
+        <button id="sync-button" class="sync-btn">
+            🔄 同步账户
+        </button>
     </div>
     
     <div id="accounts-container">
@@ -195,6 +254,10 @@
         </div>
     </div>
 
+    <div id="toast-container" style="display: none;">
+        <div class="toast-content"></div>
+    </div>
+
     <script>
         // 存储账户的数组
         let accounts = [];
@@ -224,6 +287,19 @@
         // 保存账户到localStorage
         function saveAccounts() {
             localStorage.setItem('cookieAccounts', JSON.stringify(accounts));
+        }
+        
+        // 添加防抖函数
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
         }
         
         // 渲染账户列表
@@ -261,13 +337,33 @@
                 textarea.placeholder = '在此粘贴Cookie字符串...';
                 textarea.value = account.cookie || '';
                 textarea.id = `cookie-${account.id}`;
-                textarea.addEventListener('input', () => {
+
+                const saveToServer = debounce(async (account) => {
+                    try {
+                        await fetch('/api/account', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                id: account.id,
+                                cookie: account.cookie
+                            })
+                        });
+                    } catch (error) {
+                        console.error('保存到后端失败:', error);
+                    }
+                }, 1000); // 1秒后才会实际调用接口
+
+                textarea.addEventListener('input', async () => {
                     account.cookie = textarea.value;
-                    saveAccounts();
+                    saveAccounts(); // 本地存储立即更新
                     
                     if (account.id === selectedAccountId) {
-                        // 将选中账户保存到grok_cookie中
+                        // cookie 立即更新
                         document.cookie = `grok_cookie=${encodeURIComponent(account.cookie)}; path=/; max-age=31536000`;
+                        // 延迟调用后端保存
+                        saveToServer(account);
                         updateSelectedAccountDiv();
                     }
                 });
@@ -359,18 +455,74 @@
             document.getElementById('help-panel').style.display = 'none';
         }
         
+        // 添加 toast 函数
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const content = container.querySelector('.toast-content');
+            
+            // 设置消息和样式
+            content.textContent = message;
+            content.className = 'toast-content toast-' + type;
+            
+            // 显示 toast
+            container.style.display = 'block';
+            // 触发重排以使动画生效
+            void container.offsetWidth;
+            container.classList.add('show');
+            
+            // 3秒后隐藏
+            setTimeout(() => {
+                container.classList.remove('show');
+                setTimeout(() => {
+                    container.style.display = 'none';
+                }, 300); // 等待淡出动画完成
+            }, 3000);
+        }
+
+        // 修改 syncAccounts 函数中的提示部分
+        async function syncAccounts() {
+            try {
+                const response = await fetch('/api/sync', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ accounts })
+                });
+                
+                if (!response.ok) throw new Error('同步失败');
+                
+                const data = await response.json();
+                accounts = data.accounts;
+                saveAccounts();
+                renderAccounts();
+                updateSelectedAccountDiv();
+                
+                showToast('账户同步成功！');
+            } catch (error) {
+                console.error('同步失败:', error);
+                showToast('同步失败，请稍后重试', 'error');
+            }
+        }
+
+        // 添加同步按钮事件监听
+        document.getElementById('sync-button').addEventListener('click', syncAccounts);
+
         // 初始化事件监听
         document.getElementById('add-account').addEventListener('click', addAccount);
         
         // 页面加载时初始化
-        window.addEventListener('load', () => {
+        window.addEventListener('load', async () => {
             loadAccounts();
             setGrokLink();
-
+            
             // 如果有账户但没有选中任何账户，则默认选中第一个
             if (!selectedAccountId && accounts.length > 0) {
                 selectAccount(accounts[0].id);
             }
+            
+            // 页面加载时自动同步一次
+            await syncAccounts();
         });
     </script>
 </body>
